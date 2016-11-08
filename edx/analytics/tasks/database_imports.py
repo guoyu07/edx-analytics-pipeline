@@ -4,14 +4,17 @@ Import data from external RDBMS databases into Hive.
 import datetime
 import logging
 import textwrap
+import re
 
 import luigi
 from luigi.hive import HiveQueryTask, HivePartitionTarget
 
 from edx.analytics.tasks.sqoop import SqoopImportFromMysql
-from edx.analytics.tasks.url import url_path_join
+from edx.analytics.tasks.url import url_path_join, ExternalURL, get_target_from_url
 from edx.analytics.tasks.util.overwrite import OverwriteOutputMixin
-from edx.analytics.tasks.util.hive import hive_database_name, hive_decimal_type
+from edx.analytics.tasks.util.hive import hive_database_name, hive_decimal_type, WarehouseMixin, HivePartition
+from edx.analytics.tasks.mysql_load import MysqlInsertTaskMixin, CredentialFileMysqlTarget
+from edx.analytics.tasks.vertica_load import VerticaCopyTask, VerticaCopyTaskMixin
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +41,7 @@ class DatabaseImportMixin(object):
         description='Path to the external access credentials file.',
     )
     database = luigi.Parameter(
-        default_from_config={'section': 'database-import', 'name': 'database'}
+        config_path={'section': 'database-import', 'name': 'database'},
     )
     import_date = luigi.DateParameter(
         default=None,
@@ -213,6 +216,260 @@ class ImportMysqlToHiveTableTask(DatabaseImportMixin, ImportIntoHiveTableTask):
             delimiter_replacement=' ',
         )
 
+class MysqlQueryTaskMixin(WarehouseMixin):
+    db_credentials = luigi.Parameter(
+        config_path={'section': 'database-import', 'name': 'credentials'},
+        description='Path to the external access credentials file.',
+    )
+    database = luigi.Parameter(
+        config_path={'section': 'database-import', 'name': 'database'}
+    )
+
+
+class MysqlQueryTaskBase(OverwriteOutputMixin, MysqlQueryTaskMixin, luigi.Task):
+
+    def requires(self):
+        return {
+            'credentials': ExternalURL(self.db_credentials),
+        }
+
+
+class MysqlTableSchemaTask(MysqlQueryTaskBase):
+
+    table_name = luigi.Parameter(
+        description='The name of the table.',
+    )
+
+    def output(self):
+        url_with_filename = url_path_join(self.warehouse_path, "database_import", self.database, "table_schema", "{0}.tsv".format(self.table_name))
+        return get_target_from_url(url_with_filename)
+
+    def run(self):
+        self.remove_output_on_overwrite()
+
+        mysql_target = CredentialFileMysqlTarget(
+            credentials_target=self.input()['credentials'],
+            database_name=self.database,
+            table=self.table_name,
+            update_id=self.task_id
+        )
+        connection = mysql_target.connect()
+
+        try:
+            cursor = connection.cursor()
+            cursor.execute("describe {0}".format(self.table_name))
+            column_info = cursor.fetchall()
+            with self.output().open('w') as output_file:
+                for column in column_info:
+                    field = column[0]
+                    field_type = column[1]
+                    field_null = column[2]
+                    output_file.write('\t'.join((field, field_type, field_null)))
+                    output_file.write('\n')
+        except:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+
+class GetTablesFromMysqlTask(MysqlQueryTaskBase):
+
+    def output(self):
+        url_with_filename = url_path_join(self.warehouse_path, "database_import", self.database, "table_list")
+        return get_target_from_url(url_with_filename)
+
+    def run(self):
+        self.remove_output_on_overwrite()
+
+        mysql_target = CredentialFileMysqlTarget(
+            credentials_target=self.input()['credentials'],
+            database_name=self.database,
+            table='',
+            update_id=self.task_id
+        )
+        connection = mysql_target.connect()
+
+        try:
+            cursor = connection.cursor()
+            cursor.execute("show tables")
+            table_list = cursor.fetchall()
+            with self.output().open('w') as output_file:
+                for table in table_list:
+                    output_file.write(table[0])
+                    output_file.write('\n')
+        except:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+
+class LoadMysqlToVerticaTableTask(MysqlQueryTaskMixin, VerticaCopyTask):
+
+    table_name = luigi.Parameter(
+        description='The name of the table.',
+    )
+
+    date = luigi.DateParameter(
+        default=datetime.datetime.utcnow().date(),
+    )
+
+    def __init__(self, *args, **kwargs):
+        super(LoadMysqlToVerticaTableTask, self).__init__(*args, **kwargs)
+        self.table_schema = []
+
+    def requires(self):
+        if self.required_tasks is None:
+            self.required_tasks = {
+                'credentials': ExternalURL(url=self.credentials),
+                'insert_source': self.insert_source_task,
+                'mysql_schema_task': self.mysql_schema_task,
+            }
+        return self.required_tasks
+
+    def vertica_compliant_schema(self):
+        if not self.table_schema:
+            with self.input()['mysql_schema_task'].open('r') as schema_file:
+                for line in schema_file:
+                    field_name, field_type, field_null = line.split('\t')
+
+                    types_with_parantheses = ['tinyint', 'smallint', 'mediumint', 'int', 'bigint', 'datetime']
+                    if any(_type in field_type for _type in types_with_parantheses):
+                        field_type = field_type.rsplit('(')[0]
+                    elif field_type == 'longtext':
+                        field_type = 'LONG VARCHAR'
+                    elif field_type == 'double':
+                        field_type = 'DOUBLE PRECISION'
+
+                    if field_null == "NO":
+                        field_type = field_type + " NOT NULL"
+                    self.table_schema.append((field_name, field_type))
+
+        return self.table_schema
+
+    @property
+    def copy_delimiter(self):
+        """The delimiter in the data to be copied.  Default is tab (\t)"""
+        return "','"
+
+    @property
+    def copy_null_sequence(self):
+        """The null sequence in the data to be copied.  Default is Hive NULL (\\N)"""
+        return "'NULL'"
+
+    @property
+    def enclosed_by(self):
+        return "''''"
+
+    @property
+    def insert_source_task(self):
+        partition_path_spec = HivePartition('dt', self.date.isoformat()).path_spec
+        destination = url_path_join(
+            self.warehouse_path,
+            "database_import",
+            self.database,
+            self.table_name,
+            partition_path_spec
+        ) + '/'
+        return SqoopImportFromMysql(
+            table_name=self.table_name,
+            credentials=self.db_credentials,
+            database=self.database,
+            # TODO: We may want to make the explicit passing in of columns optional as it prevents a direct transfer.
+            # Make sure delimiters and nulls etc. still work after removal.
+            destination=destination,
+            overwrite=self.overwrite,
+            # Hive expects NULL to be represented by the string "\N" in the data. You have to pass in "\\N" to sqoop
+            # since it uses that string directly in the generated Java code, so "\\N" actually looks like "\N" to the
+            # Java code. In order to get "\\N" onto the command line we have to use another set of escapes to tell the
+            # python code to pass through the "\" character.
+            #null_string='\\\\N',
+            # It's unclear why, but this setting prevents us from correctly substituting nulls with \N.
+            mysql_delimiters=True,
+            # This is a string that is interpreted as an octal number, so it is equivalent to the character Ctrl-A
+            # (0x01). This is the default separator for fields in Hive.
+            #fields_terminated_by='\x01',
+            # Replace delimiters with a single space if they appear in the data. This prevents the import of malformed
+            # records. Hive does not support escape characters or other reasonable workarounds to this problem.
+            #delimiter_replacement=' ',
+        )
+
+    @property
+    def mysql_schema_task(self):
+        return MysqlTableSchemaTask(
+            table_name=self.table_name,
+            db_credentials=self.db_credentials,
+            database=self.database,
+            overwrite=self.overwrite,
+            warehouse_path=self.warehouse_path,
+        )
+
+    @property
+    def default_columns(self):
+        return []
+
+    @property
+    def table(self):
+        return self.table_name
+
+    @property
+    def columns(self):
+        return self.vertica_compliant_schema()
+
+    @property
+    def auto_primary_key(self):
+        return None
+
+
+class ImportMysqlToVerticaTask(MysqlQueryTaskMixin, luigi.WrapperTask):
+
+    schema = luigi.Parameter(
+        config_path={'section': 'vertica-export', 'name': 'schema'},
+        description='The schema to which to write.',
+    )
+    credentials = luigi.Parameter(
+        config_path={'section': 'vertica-export', 'name': 'credentials'},
+        description='Path to the external access credentials file.',
+    )
+    date = luigi.DateParameter(
+        default=datetime.datetime.utcnow().date(),
+    )
+    overwrite = luigi.BooleanParameter(
+        default=False,
+        significant=False,
+    )
+
+    exclude = luigi.Parameter(
+        is_list=True,
+        default=(),
+    )
+
+    def requires(self):
+        tables_task = GetTablesFromMysqlTask(
+            db_credentials=self.db_credentials,
+            database=self.database,
+            warehouse_path=self.warehouse_path,
+            overwrite=self.overwrite,
+        )
+        luigi.build([tables_task], local_scheduler=True)
+        with tables_task.output().open('r') as tables_file:
+            for line in tables_file:
+                table_name = line.strip('\n')
+                match = None
+                for pattern in self.exclude:
+                    match = re.match(pattern, table_name)
+                if not match:
+                    yield LoadMysqlToVerticaTableTask(
+                        credentials=self.credentials,
+                        schema=self.schema,
+                        db_credentials=self.db_credentials,
+                        database=self.database,
+                        warehouse_path=self.warehouse_path,
+                        table_name=line.strip('\n'),
+                        overwrite=self.overwrite,
+                        date=self.date,
+                    )
 
 class ImportStudentCourseEnrollmentTask(ImportMysqlToHiveTableTask):
     """Imports course enrollment information from an external LMS DB to a destination directory."""
