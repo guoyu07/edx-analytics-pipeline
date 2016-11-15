@@ -5,11 +5,58 @@ Ensure we can write from MySQL to Hive data sources.
 import datetime
 import textwrap
 
-from mock import patch, Mock
+from mock import patch, Mock, MagicMock
 
-from edx.analytics.tasks.database_imports import ImportStudentCourseEnrollmentTask, ImportIntoHiveTableTask
+from edx.analytics.tasks.database_imports import (
+    ImportStudentCourseEnrollmentTask, ImportIntoHiveTableTask, LoadMysqlToVerticaTableTask
+)
 from edx.analytics.tasks.tests import unittest
 from edx.analytics.tasks.tests.config import with_luigi_config
+from edx.analytics.tasks.tests.target import FakeTarget
+
+
+class LoadMysqlToVerticaTableTaskTest(unittest.TestCase):
+
+    def test_table_schema(self):
+        test_input = """
+                    id,int(11),NO
+                    slug,varchar(255),YES
+                    site_id,int(11),NO
+                    parent_id,int(11),YES
+                    lft,int(10) unsigned,NO
+                    rght,int(10) unsigned,NO
+                    tree_id,int(10) unsigned,NO
+                    level,int(10) unsigned,NO
+                    article_id,int(11),NO
+                    feedback,longtext,YES
+                    value,double,NO
+                    """
+
+        def reformat(string):
+            """Reformat string to make it like a TSV."""
+            return textwrap.dedent(string).strip().replace(',', '\t')
+
+        task = LoadMysqlToVerticaTableTask(table_name='test_table')
+
+        fake_input = {
+            'mysql_schema_task': FakeTarget(value=reformat(test_input))
+        }
+        task.input = MagicMock(return_value=fake_input)
+
+        expected_schema = [
+            ('id', 'int NOT NULL'),
+            ('slug', 'varchar(255)'),
+            ('site_id', 'int NOT NULL'),
+            ('parent_id', 'int'),
+            ('lft', 'int NOT NULL'),
+            ('rght', 'int NOT NULL'),
+            ('tree_id', 'int NOT NULL'),
+            ('level', 'int NOT NULL'),
+            ('article_id', 'int NOT NULL'),
+            ('feedback', 'LONG VARCHAR'),
+            ('value', 'DOUBLE PRECISION NOT NULL'),
+        ]
+        self.assertEqual(task.vertica_compliant_schema(), expected_schema)
 
 
 class ImportStudentCourseEnrollmentTestCase(unittest.TestCase):

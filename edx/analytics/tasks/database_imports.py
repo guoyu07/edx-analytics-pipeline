@@ -13,8 +13,8 @@ from edx.analytics.tasks.sqoop import SqoopImportFromMysql
 from edx.analytics.tasks.url import url_path_join, ExternalURL, get_target_from_url
 from edx.analytics.tasks.util.overwrite import OverwriteOutputMixin
 from edx.analytics.tasks.util.hive import hive_database_name, hive_decimal_type, WarehouseMixin, HivePartition
-from edx.analytics.tasks.mysql_load import MysqlInsertTaskMixin, CredentialFileMysqlTarget
-from edx.analytics.tasks.vertica_load import VerticaCopyTask, VerticaCopyTaskMixin
+from edx.analytics.tasks.mysql_load import CredentialFileMysqlTarget
+from edx.analytics.tasks.vertica_load import VerticaCopyTask
 
 log = logging.getLogger(__name__)
 
@@ -216,6 +216,7 @@ class ImportMysqlToHiveTableTask(DatabaseImportMixin, ImportIntoHiveTableTask):
             delimiter_replacement=' ',
         )
 
+
 class MysqlQueryTaskMixin(WarehouseMixin):
     db_credentials = luigi.Parameter(
         config_path={'section': 'database-import', 'name': 'credentials'},
@@ -241,7 +242,13 @@ class MysqlTableSchemaTask(MysqlQueryTaskBase):
     )
 
     def output(self):
-        url_with_filename = url_path_join(self.warehouse_path, "database_import", self.database, "table_schema", "{0}.tsv".format(self.table_name))
+        url_with_filename = url_path_join(
+            self.warehouse_path,
+            "database_import",
+            self.database,
+            "table_schema",
+            "{0}.tsv".format(self.table_name)
+        )
         return get_target_from_url(url_with_filename)
 
     def run(self):
@@ -342,7 +349,7 @@ class LoadMysqlToVerticaTableTask(MysqlQueryTaskMixin, VerticaCopyTask):
                     elif field_type == 'double':
                         field_type = 'DOUBLE PRECISION'
 
-                    if field_null == "NO":
+                    if field_null.strip() == "NO":
                         field_type = field_type + " NOT NULL"
                     self.table_schema.append((field_name, field_type))
 
@@ -376,23 +383,9 @@ class LoadMysqlToVerticaTableTask(MysqlQueryTaskMixin, VerticaCopyTask):
             table_name=self.table_name,
             credentials=self.db_credentials,
             database=self.database,
-            # TODO: We may want to make the explicit passing in of columns optional as it prevents a direct transfer.
-            # Make sure delimiters and nulls etc. still work after removal.
             destination=destination,
             overwrite=self.overwrite,
-            # Hive expects NULL to be represented by the string "\N" in the data. You have to pass in "\\N" to sqoop
-            # since it uses that string directly in the generated Java code, so "\\N" actually looks like "\N" to the
-            # Java code. In order to get "\\N" onto the command line we have to use another set of escapes to tell the
-            # python code to pass through the "\" character.
-            #null_string='\\\\N',
-            # It's unclear why, but this setting prevents us from correctly substituting nulls with \N.
             mysql_delimiters=True,
-            # This is a string that is interpreted as an octal number, so it is equivalent to the character Ctrl-A
-            # (0x01). This is the default separator for fields in Hive.
-            #fields_terminated_by='\x01',
-            # Replace delimiters with a single space if they appear in the data. This prevents the import of malformed
-            # records. Hive does not support escape characters or other reasonable workarounds to this problem.
-            #delimiter_replacement=' ',
         )
 
     @property
