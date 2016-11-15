@@ -44,18 +44,19 @@ class LoadMysqlToVerticaTableTaskTest(unittest.TestCase):
         task.input = MagicMock(return_value=fake_input)
 
         expected_schema = [
-            ('id', 'int NOT NULL'),
-            ('slug', 'varchar(255)'),
-            ('site_id', 'int NOT NULL'),
-            ('parent_id', 'int'),
-            ('lft', 'int NOT NULL'),
-            ('rght', 'int NOT NULL'),
-            ('tree_id', 'int NOT NULL'),
-            ('level', 'int NOT NULL'),
-            ('article_id', 'int NOT NULL'),
-            ('feedback', 'LONG VARCHAR'),
-            ('value', 'DOUBLE PRECISION NOT NULL'),
+            ('"id"', 'int NOT NULL'),
+            ('"slug"', 'varchar(255)'),
+            ('"site_id"', 'int NOT NULL'),
+            ('"parent_id"', 'int'),
+            ('"lft"', 'int NOT NULL'),
+            ('"rght"', 'int NOT NULL'),
+            ('"tree_id"', 'int NOT NULL'),
+            ('"level"', 'int NOT NULL'),
+            ('"article_id"', 'int NOT NULL'),
+            ('"feedback"', 'LONG VARCHAR'),
+            ('"value"', 'DOUBLE PRECISION NOT NULL'),
         ]
+
         self.assertEqual(task.vertica_compliant_schema(), expected_schema)
 
 

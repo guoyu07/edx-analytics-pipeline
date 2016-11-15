@@ -351,6 +351,9 @@ class LoadMysqlToVerticaTableTask(MysqlQueryTaskMixin, VerticaCopyTask):
 
                     if field_null.strip() == "NO":
                         field_type = field_type + " NOT NULL"
+
+                    field_name = "\"{}\"".format(field_name)
+
                     self.table_schema.append((field_name, field_type))
 
         return self.table_schema
