@@ -357,12 +357,12 @@ class LoadMysqlToVerticaTableTask(MysqlQueryTaskMixin, VerticaCopyTask):
 
     @property
     def copy_delimiter(self):
-        """The delimiter in the data to be copied.  Default is tab (\t)"""
+        """The delimiter in the data to be copied."""
         return "','"
 
     @property
     def copy_null_sequence(self):
-        """The null sequence in the data to be copied.  Default is Hive NULL (\\N)"""
+        """The null sequence in the data to be copied."""
         return "'NULL'"
 
     @property
