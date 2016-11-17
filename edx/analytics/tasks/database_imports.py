@@ -233,91 +233,6 @@ class MysqlQueryTaskMixin(WarehouseMixin):
     )
 
 
-class MysqlQueryTaskBase(OverwriteOutputMixin, MysqlQueryTaskMixin, luigi.Task):
-
-    def requires(self):
-        return {
-            'credentials': ExternalURL(self.db_credentials),
-        }
-
-
-class MysqlTableSchemaTask(MysqlQueryTaskBase):
-
-    table_name = luigi.Parameter(
-        description='The name of the table.',
-    )
-
-    def output(self):
-        url_with_filename = url_path_join(
-            self.warehouse_path,
-            "database_import",
-            self.database,
-            "table_schema",
-            "{0}.tsv".format(self.table_name)
-        )
-        return get_target_from_url(url_with_filename)
-
-    def run(self):
-        self.remove_output_on_overwrite()
-
-        mysql_target = CredentialFileMysqlTarget(
-            credentials_target=self.input()['credentials'],
-            database_name=self.database,
-            table=self.table_name,
-            update_id=self.task_id
-        )
-        connection = mysql_target.connect()
-
-        try:
-            cursor = connection.cursor()
-            cursor.execute("describe {0}".format(self.table_name))
-            column_info = cursor.fetchall()
-            with self.output().open('w') as output_file:
-                for column in column_info:
-                    field = column[0]
-                    field_type = column[1]
-                    field_null = column[2]
-                    output_file.write('\t'.join((field, field_type, field_null)))
-                    output_file.write('\n')
-        except:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
-
-
-class GetTablesFromMysqlTask(MysqlQueryTaskBase):
-
-    def output(self):
-        url_with_filename = url_path_join(self.warehouse_path, "database_import", self.database, "table_list")
-        return get_target_from_url(url_with_filename)
-
-    def run(self):
-        self.remove_output_on_overwrite()
-
-        mysql_target = CredentialFileMysqlTarget(
-            credentials_target=self.input()['credentials'],
-            database_name=self.database,
-            table='',
-            update_id=self.task_id
-        )
-        connection = mysql_target.connect()
-
-        try:
-            cursor = connection.cursor()
-            cursor.execute("show tables")
-            table_list = cursor.fetchall()
-            with self.output().open('w') as output_file:
-                for table in table_list:
-                    output_file.write(table[0])
-                    output_file.write('\n')
-        except:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
-
-
 def get_mysql_query_results(credentials, database, query):
     credentials_target = ExternalURL(url=credentials).output()
     cred = None
@@ -361,7 +276,6 @@ class LoadMysqlToVerticaTableTask(MysqlQueryTaskMixin, VerticaCopyTask):
             self.required_tasks = {
                 'credentials': ExternalURL(url=self.credentials),
                 'insert_source': self.insert_source_task,
-                #'mysql_schema_task': self.mysql_schema_task,
             }
         return self.required_tasks
 
@@ -389,28 +303,6 @@ class LoadMysqlToVerticaTableTask(MysqlQueryTaskMixin, VerticaCopyTask):
                 self.table_schema.append((field_name, field_type))
 
         return self.table_schema
-
-        # if not self.table_schema:
-        #     with self.input()['mysql_schema_task'].open('r') as schema_file:
-        #         for line in schema_file:
-        #             field_name, field_type, field_null = line.split('\t')
-        #
-        #             types_with_parantheses = ['tinyint', 'smallint', 'mediumint', 'int', 'bigint', 'datetime']
-        #             if any(_type in field_type for _type in types_with_parantheses):
-        #                 field_type = field_type.rsplit('(')[0]
-        #             elif field_type == 'longtext':
-        #                 field_type = 'LONG VARCHAR'
-        #             elif field_type == 'double':
-        #                 field_type = 'DOUBLE PRECISION'
-        #
-        #             if field_null.strip() == "NO":
-        #                 field_type = field_type + " NOT NULL"
-        #
-        #             field_name = "\"{}\"".format(field_name)
-        #
-        #             self.table_schema.append((field_name, field_type))
-        #
-        # return self.table_schema
 
     @property
     def copy_delimiter(self):
@@ -443,16 +335,6 @@ class LoadMysqlToVerticaTableTask(MysqlQueryTaskMixin, VerticaCopyTask):
             destination=destination,
             overwrite=self.overwrite,
             mysql_delimiters=True,
-        )
-
-    @property
-    def mysql_schema_task(self):
-        return MysqlTableSchemaTask(
-            table_name=self.table_name,
-            db_credentials=self.db_credentials,
-            database=self.database,
-            overwrite=self.overwrite,
-            warehouse_path=self.warehouse_path,
         )
 
     @property
@@ -497,7 +379,7 @@ class ImportMysqlToVerticaTask(MysqlQueryTaskMixin, luigi.WrapperTask):
 
     def __init__(self, *args, **kwargs):
         super(ImportMysqlToVerticaTask, self).__init__(*args, **kwargs)
-        self.table_list = ['order_order', 'order_line']
+        self.table_list = []
 
     def requires(self):
         if not self.table_list:
@@ -519,30 +401,7 @@ class ImportMysqlToVerticaTask(MysqlQueryTaskMixin, luigi.WrapperTask):
                     overwrite=self.overwrite,
                     date=self.date,
                 )
-        # tables_task = GetTablesFromMysqlTask(
-        #     db_credentials=self.db_credentials,
-        #     database=self.database,
-        #     warehouse_path=self.warehouse_path,
-        #     overwrite=self.overwrite,
-        # )
-        # luigi.build([tables_task], local_scheduler=True)
-        # with tables_task.output().open('r') as tables_file:
-        #     for line in tables_file:
-        #         table_name = line.strip('\n')
-        #         match = None
-        #         for pattern in self.exclude:
-        #             match = re.match(pattern, table_name)
-        #         if not match:
-        #             yield LoadMysqlToVerticaTableTask(
-        #                 credentials=self.credentials,
-        #                 schema=self.schema,
-        #                 db_credentials=self.db_credentials,
-        #                 database=self.database,
-        #                 warehouse_path=self.warehouse_path,
-        #                 table_name=table_name,
-        #                 overwrite=self.overwrite,
-        #                 date=self.date,
-        #             )
+
 
 class ImportStudentCourseEnrollmentTask(ImportMysqlToHiveTableTask):
     """Imports course enrollment information from an external LMS DB to a destination directory."""
