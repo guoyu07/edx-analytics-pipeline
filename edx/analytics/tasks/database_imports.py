@@ -497,7 +497,7 @@ class ImportMysqlToVerticaTask(MysqlQueryTaskMixin, luigi.WrapperTask):
 
     def __init__(self, *args, **kwargs):
         super(ImportMysqlToVerticaTask, self).__init__(*args, **kwargs)
-        self.table_list = None
+        self.table_list = ['order_order', 'order_line']
 
     def requires(self):
         if not self.table_list:
