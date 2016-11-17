@@ -361,32 +361,56 @@ class LoadMysqlToVerticaTableTask(MysqlQueryTaskMixin, VerticaCopyTask):
             self.required_tasks = {
                 'credentials': ExternalURL(url=self.credentials),
                 'insert_source': self.insert_source_task,
-                'mysql_schema_task': self.mysql_schema_task,
+                #'mysql_schema_task': self.mysql_schema_task,
             }
         return self.required_tasks
 
     def vertica_compliant_schema(self):
         if not self.table_schema:
-            with self.input()['mysql_schema_task'].open('r') as schema_file:
-                for line in schema_file:
-                    field_name, field_type, field_null = line.split('\t')
+            results = get_mysql_query_results(self.db_credentials, self.database, 'describe {}'.format(self.table_name))
+            for result in results:
+                field_name = result[0].strip()
+                field_type = result[1].strip()
+                field_null = result[2].strip()
 
-                    types_with_parantheses = ['tinyint', 'smallint', 'mediumint', 'int', 'bigint', 'datetime']
-                    if any(_type in field_type for _type in types_with_parantheses):
-                        field_type = field_type.rsplit('(')[0]
-                    elif field_type == 'longtext':
-                        field_type = 'LONG VARCHAR'
-                    elif field_type == 'double':
-                        field_type = 'DOUBLE PRECISION'
+                types_with_parantheses = ['tinyint', 'smallint', 'mediumint', 'int', 'bigint', 'datetime']
+                if any(_type in field_type for _type in types_with_parantheses):
+                    field_type = field_type.rsplit('(')[0]
+                elif field_type == 'longtext':
+                    field_type = 'LONG VARCHAR'
+                elif field_type == 'double':
+                    field_type = 'DOUBLE PRECISION'
 
-                    if field_null.strip() == "NO":
-                        field_type = field_type + " NOT NULL"
+                if field_null == "NO":
+                    field_type = field_type + " NOT NULL"
 
-                    field_name = "\"{}\"".format(field_name)
+                field_name = "\"{}\"".format(field_name)
 
-                    self.table_schema.append((field_name, field_type))
+                self.table_schema.append((field_name, field_type))
 
         return self.table_schema
+
+        # if not self.table_schema:
+        #     with self.input()['mysql_schema_task'].open('r') as schema_file:
+        #         for line in schema_file:
+        #             field_name, field_type, field_null = line.split('\t')
+        #
+        #             types_with_parantheses = ['tinyint', 'smallint', 'mediumint', 'int', 'bigint', 'datetime']
+        #             if any(_type in field_type for _type in types_with_parantheses):
+        #                 field_type = field_type.rsplit('(')[0]
+        #             elif field_type == 'longtext':
+        #                 field_type = 'LONG VARCHAR'
+        #             elif field_type == 'double':
+        #                 field_type = 'DOUBLE PRECISION'
+        #
+        #             if field_null.strip() == "NO":
+        #                 field_type = field_type + " NOT NULL"
+        #
+        #             field_name = "\"{}\"".format(field_name)
+        #
+        #             self.table_schema.append((field_name, field_type))
+        #
+        # return self.table_schema
 
     @property
     def copy_delimiter(self):
