@@ -18,6 +18,11 @@ from edx.analytics.tasks.vertica_load import VerticaCopyTask
 
 log = logging.getLogger(__name__)
 
+try:
+    import mysql.connector
+except ImportError:
+    log.warn('Unable to import mysql client libraries')
+
 
 class DatabaseImportMixin(object):
     """
@@ -312,6 +317,30 @@ class GetTablesFromMysqlTask(MysqlQueryTaskBase):
             connection.close()
 
 
+def get_mysql_query_results(credentials, database, query):
+    credentials_target = ExternalURL(url=credentials).output()
+    cred = None
+    with credentials_target.open('r') as credentials_file:
+        cred = json.load(credentials_file)
+
+    connection = mysql.connector.connect(user=cred.get('username'),
+                                         password=cred.get('password'),
+                                         host=cred.get('host'),
+                                         port=cred.get('port'),
+                                         database=database)
+
+    try:
+        cursor = connection.cursor()
+        cursor.execute(query)
+        results = cursor.fetchall()
+    except:
+        raise
+    finally:
+        connection.close()
+
+    return results
+
+
 class LoadMysqlToVerticaTableTask(MysqlQueryTaskMixin, VerticaCopyTask):
 
     table_name = luigi.Parameter(
@@ -441,31 +470,54 @@ class ImportMysqlToVerticaTask(MysqlQueryTaskMixin, luigi.WrapperTask):
         default=(),
     )
 
+    def __init__(self, *args, **kwargs):
+        super(ImportMysqlToVerticaTask, self).__init__(*args, **kwargs)
+        self.table_list = None
+
     def requires(self):
-        tables_task = GetTablesFromMysqlTask(
-            db_credentials=self.db_credentials,
-            database=self.database,
-            warehouse_path=self.warehouse_path,
-            overwrite=self.overwrite,
-        )
-        luigi.build([tables_task], local_scheduler=True)
-        with tables_task.output().open('r') as tables_file:
-            for line in tables_file:
-                table_name = line.strip('\n')
-                match = None
-                for pattern in self.exclude:
-                    match = re.match(pattern, table_name)
-                if not match:
-                    yield LoadMysqlToVerticaTableTask(
-                        credentials=self.credentials,
-                        schema=self.schema,
-                        db_credentials=self.db_credentials,
-                        database=self.database,
-                        warehouse_path=self.warehouse_path,
-                        table_name=line.strip('\n'),
-                        overwrite=self.overwrite,
-                        date=self.date,
-                    )
+        if not self.table_list:
+            results = get_mysql_query_results(self.db_credentials, self.database, 'show tables')
+            self.table_list = [result[0].strip() for result in results]
+
+        for table_name in self.table_list:
+            match = None
+            for pattern in self.exclude:
+                match = re.match(pattern, table_name)
+            if not match:
+                yield LoadMysqlToVerticaTableTask(
+                    credentials=self.credentials,
+                    schema=self.schema,
+                    db_credentials=self.db_credentials,
+                    database=self.database,
+                    warehouse_path=self.warehouse_path,
+                    table_name=table_name,
+                    overwrite=self.overwrite,
+                    date=self.date,
+                )
+        # tables_task = GetTablesFromMysqlTask(
+        #     db_credentials=self.db_credentials,
+        #     database=self.database,
+        #     warehouse_path=self.warehouse_path,
+        #     overwrite=self.overwrite,
+        # )
+        # luigi.build([tables_task], local_scheduler=True)
+        # with tables_task.output().open('r') as tables_file:
+        #     for line in tables_file:
+        #         table_name = line.strip('\n')
+        #         match = None
+        #         for pattern in self.exclude:
+        #             match = re.match(pattern, table_name)
+        #         if not match:
+        #             yield LoadMysqlToVerticaTableTask(
+        #                 credentials=self.credentials,
+        #                 schema=self.schema,
+        #                 db_credentials=self.db_credentials,
+        #                 database=self.database,
+        #                 warehouse_path=self.warehouse_path,
+        #                 table_name=table_name,
+        #                 overwrite=self.overwrite,
+        #                 date=self.date,
+        #             )
 
 class ImportStudentCourseEnrollmentTask(ImportMysqlToHiveTableTask):
     """Imports course enrollment information from an external LMS DB to a destination directory."""
