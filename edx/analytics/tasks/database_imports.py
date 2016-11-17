@@ -5,6 +5,7 @@ import datetime
 import logging
 import textwrap
 import re
+import json
 
 import luigi
 from luigi.hive import HiveQueryTask, HivePartitionTarget
