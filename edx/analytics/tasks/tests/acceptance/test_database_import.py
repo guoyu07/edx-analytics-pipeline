@@ -38,7 +38,7 @@ class DatabaseImportAcceptanceTest(AcceptanceTestCase):
                 'database_import',
                 'expected_database_import_test_table.csv'
             )
-            expected = pandas.read_csv(expected_output_csv, parse_dates=[6,7,9])
+            expected = pandas.read_csv(expected_output_csv, parse_dates=[6,7])
             expected.fillna('', inplace=True)
 
             cursor.execute(
