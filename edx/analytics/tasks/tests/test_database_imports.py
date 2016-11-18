@@ -50,6 +50,9 @@ class LoadMysqlToVerticaTableTaskTest(unittest.TestCase):
              ('profile_image_uploaded_at', 'datetime', 'YES', '', None, ''),
              ('change_data', 'datetime(6)', 'YES', '', None, ''),
              ('total_amount', 'double', 'NO', '', None, ''),
+             ('expiration_date', 'date', 'YES', '', None, ''),
+             ('ip_address', 'char(39)', 'YES', '', None, ''),
+             ('unit_cost', 'decimal(30,2)', 'NO', '', None, '')
          ]
          mysql_query_results_mock.return_value = desc_table
 
@@ -65,6 +68,9 @@ class LoadMysqlToVerticaTableTaskTest(unittest.TestCase):
              ('"profile_image_uploaded_at"', 'datetime'),
              ('"change_data"', 'datetime'),
              ('"total_amount"', 'DOUBLE PRECISION NOT NULL'),
+             ('"expiration_date"', 'date'),
+             ('"ip_address"', 'char(39)'),
+             ('"unit_cost"', 'decimal(30,2) NOT NULL'),
          ]
 
          self.assertEqual(task.vertica_compliant_schema(), expected_schema)
