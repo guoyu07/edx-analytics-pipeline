@@ -6,58 +6,68 @@ import datetime
 import textwrap
 
 from mock import patch, Mock, MagicMock
+from ddt import ddt, data, unpack
 
 from edx.analytics.tasks.database_imports import (
-    ImportStudentCourseEnrollmentTask, ImportIntoHiveTableTask, LoadMysqlToVerticaTableTask
+    ImportStudentCourseEnrollmentTask, ImportIntoHiveTableTask, LoadMysqlToVerticaTableTask, ImportMysqlToVerticaTask
 )
 from edx.analytics.tasks.tests import unittest
 from edx.analytics.tasks.tests.config import with_luigi_config
 from edx.analytics.tasks.tests.target import FakeTarget
 
 
+@ddt
+class ImportMysqlToVerticaTaskTest(unittest.TestCase):
+
+    def setUp(self):
+        self.task = ImportMysqlToVerticaTask(exclude=('auth_user$', 'courseware_studentmodule*', 'oauth*'))
+
+    @data(
+        ('auth_user', True),
+        ('auth_userprofile', False),
+        ('courseware_studentmodule', True),
+        ('courseware_studentmodulehistory', True),
+        ('oauth2_accesstoken', True),
+        ('oauth_provider_token', True),
+    )
+    @unpack
+    def test_should_exclude_table(self, table, expected):
+        actual = self.task.should_exclude_table(table)
+        self.assertEqual(actual, expected)
+
+
 class LoadMysqlToVerticaTableTaskTest(unittest.TestCase):
 
-    def test_table_schema(self):
-        test_input = """
-                    id,int(11),NO
-                    slug,varchar(255),YES
-                    site_id,int(11),NO
-                    parent_id,int(11),YES
-                    lft,int(10) unsigned,NO
-                    rght,int(10) unsigned,NO
-                    tree_id,int(10) unsigned,NO
-                    level,int(10) unsigned,NO
-                    article_id,int(11),NO
-                    feedback,longtext,YES
-                    value,double,NO
-                    """
+     @patch('edx.analytics.tasks.database_imports.get_mysql_query_results')
+     def test_table_schema(self, mysql_query_results_mock):
+         desc_table = [
+             ('id', 'int(11)', 'NO', 'PRI', None, 'auto_increment'),
+             ('name', 'varchar(255)', 'NO', 'MUL', None, ''),
+             ('meta', 'longtext', 'NO', '', None, ''),
+             ('width', 'smallint(6)', 'YES', 'MUL', None, ''),
+             ('allow_certificate', 'tinyint(1)', 'NO', '', None, ''),
+             ('user_id', 'bigint(20) unsigned', 'NO', '', None, ''),
+             ('profile_image_uploaded_at', 'datetime', 'YES', '', None, ''),
+             ('change_data', 'datetime(6)', 'YES', '', None, ''),
+             ('total_amount', 'double', 'NO', '', None, ''),
+         ]
+         mysql_query_results_mock.return_value = desc_table
 
-        def reformat(string):
-            """Reformat string to make it like a TSV."""
-            return textwrap.dedent(string).strip().replace(',', '\t')
+         task = LoadMysqlToVerticaTableTask(table_name='test_table')
 
-        task = LoadMysqlToVerticaTableTask(table_name='test_table')
+         expected_schema = [
+             ('"id"', 'int NOT NULL'),
+             ('"name"', 'varchar(255) NOT NULL'),
+             ('"meta"', 'LONG VARCHAR NOT NULL'),
+             ('"width"', 'smallint'),
+             ('"allow_certificate"', 'tinyint NOT NULL'),
+             ('"user_id"', 'bigint NOT NULL'),
+             ('"profile_image_uploaded_at"', 'datetime'),
+             ('"change_data"', 'datetime'),
+             ('"total_amount"', 'DOUBLE PRECISION NOT NULL'),
+         ]
 
-        fake_input = {
-            'mysql_schema_task': FakeTarget(value=reformat(test_input))
-        }
-        task.input = MagicMock(return_value=fake_input)
-
-        expected_schema = [
-            ('"id"', 'int NOT NULL'),
-            ('"slug"', 'varchar(255)'),
-            ('"site_id"', 'int NOT NULL'),
-            ('"parent_id"', 'int'),
-            ('"lft"', 'int NOT NULL'),
-            ('"rght"', 'int NOT NULL'),
-            ('"tree_id"', 'int NOT NULL'),
-            ('"level"', 'int NOT NULL'),
-            ('"article_id"', 'int NOT NULL'),
-            ('"feedback"', 'LONG VARCHAR'),
-            ('"value"', 'DOUBLE PRECISION NOT NULL'),
-        ]
-
-        self.assertEqual(task.vertica_compliant_schema(), expected_schema)
+         self.assertEqual(task.vertica_compliant_schema(), expected_schema)
 
 
 class ImportStudentCourseEnrollmentTestCase(unittest.TestCase):

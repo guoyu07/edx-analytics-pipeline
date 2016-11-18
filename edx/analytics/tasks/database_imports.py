@@ -249,8 +249,6 @@ def get_mysql_query_results(credentials, database, query):
         cursor = connection.cursor()
         cursor.execute(query)
         results = cursor.fetchall()
-    except:
-        raise
     finally:
         connection.close()
 
@@ -287,8 +285,8 @@ class LoadMysqlToVerticaTableTask(MysqlQueryTaskMixin, VerticaCopyTask):
                 field_type = result[1].strip()
                 field_null = result[2].strip()
 
-                types_with_parantheses = ['tinyint', 'smallint', 'mediumint', 'int', 'bigint', 'datetime']
-                if any(_type in field_type for _type in types_with_parantheses):
+                types_with_parentheses = ['tinyint', 'smallint', 'int', 'bigint', 'datetime']
+                if any(_type in field_type for _type in types_with_parentheses):
                     field_type = field_type.rsplit('(')[0]
                 elif field_type == 'longtext':
                     field_type = 'LONG VARCHAR'
@@ -381,16 +379,18 @@ class ImportMysqlToVerticaTask(MysqlQueryTaskMixin, luigi.WrapperTask):
         super(ImportMysqlToVerticaTask, self).__init__(*args, **kwargs)
         self.table_list = []
 
+    def should_exclude_table(self, table_name):
+        if any(re.match(pattern, table_name) for pattern in self.exclude):
+            return True
+        return False
+
     def requires(self):
         if not self.table_list:
             results = get_mysql_query_results(self.db_credentials, self.database, 'show tables')
             self.table_list = [result[0].strip() for result in results]
 
         for table_name in self.table_list:
-            match = None
-            for pattern in self.exclude:
-                match = re.match(pattern, table_name)
-            if not match:
+            if not self.should_exclude_table(table_name):
                 yield LoadMysqlToVerticaTableTask(
                     credentials=self.credentials,
                     schema=self.schema,
