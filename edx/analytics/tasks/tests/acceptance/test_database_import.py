@@ -15,7 +15,7 @@ class DatabaseImportAcceptanceTest(AcceptanceTestCase):
         super(DatabaseImportAcceptanceTest, self).setUp()
         #self.execute_sql_fixture_file('load_auth_user_for_internal_reporting_user.sql')
         #self.execute_sql_fixture_file('load_auth_userprofile.sql')
-        self.execute_sql_fixture_file('load_certificates_generatedcertificate.sql')
+        self.execute_sql_fixture_file('load_database_import_test_table.sql')
         # self.execute_sql_fixture_file('load_course_groups_courseusergroup.sql')
         # self.execute_sql_fixture_file('load_course_groups_courseusergroup_users.sql')
         # self.execute_sql_fixture_file('load_student_courseenrollment.sql')
@@ -36,16 +36,16 @@ class DatabaseImportAcceptanceTest(AcceptanceTestCase):
                 self.data_dir,
                 'output',
                 'database_import',
-                'expected_certificates_generatedcertificate.csv'
+                'expected_database_import_test_table.csv'
             )
             expected = pandas.read_csv(expected_output_csv, parse_dates=[11,12])
             expected.fillna('', inplace=True)
 
             cursor.execute(
-                "SELECT * FROM {schema}.certificates_generatedcertificate".format(schema=self.vertica.schema_name)
+                "SELECT * FROM {schema}.database_import_test_table".format(schema=self.vertica.schema_name)
             )
             response = cursor.fetchall()
-            certificates_generatedcertificate = pandas.DataFrame(response, columns=list(expected.columns))
-            certificates_generatedcertificate = certificates_generatedcertificate.convert_objects(convert_numeric=True)
+            database_import_test_table = pandas.DataFrame(response, columns=list(expected.columns))
+            database_import_test_table = database_import_test_table.convert_objects(convert_numeric=True)
 
-            self.assert_data_frames_equal(certificates_generatedcertificate, expected)
+            self.assert_data_frames_equal(database_import_test_table, expected)
